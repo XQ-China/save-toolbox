@@ -16,7 +16,7 @@
 
 ## 下载与安装
 
-1. 到 [Releases](../../releases) 下载 `save-toolbox-v1.0.27.zip`
+1. 到 [Releases](../../releases) 下载 `save-toolbox-v1.0.28.zip`
 2. 解压到固定目录（例如 `D:\工具\存档工具箱`），**不要**放在 Temp 或桌面随手丢——备份文件夹跟着程序目录走
 3. 双击 `save-toolbox.exe`，直接出窗口，没有黑色命令行
 
