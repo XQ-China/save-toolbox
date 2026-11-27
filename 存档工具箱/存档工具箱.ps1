@@ -40,7 +40,7 @@ $global:SR_Aliases = @{
 }
 
 $script:SaveExts = @('.sav', '.save', '.es3', '.slot', '.sgm', '.plr', '.wld', '.rvdata2', '.rpgsave', '.sl2', '.dat',
-  '.json', '.cfg', '.xml', '.profile', '.savx', '.mca', '.mcr', '.nbt', '.ldb', '.twld', '.tplr')
+  '.json', '.cfg', '.xml', '.profile', '.savx', '.mca', '.mcr', '.nbt', '.twld', '.tplr')
 
 # 判断是不是存档文件：正常后缀，或 xxx.wld.bak / .bak2 这种备份双后缀
 function Test-IsSaveFile([string]$name) {
@@ -605,7 +605,15 @@ function Find-InPath([string]$path) {
   return $uniq
 }
 function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
-  $noise = @('cache', 'cachedata', 'logs', 'log', 'crash', 'crashes', 'temp', 'tmp', 'shader', 'shadercache', 'backup')
+  # 只列像存档的目录：文件 >=1KB；含明确存档后缀，或目录总大小 >=256KB
+  $minFile = 1024
+  $minBig = 256KB
+  $strictExt = @('.sav', '.save', '.savx', '.wld', '.twld', '.tplr', '.plr', '.sgm', '.sl2', '.rvdata2',
+                 '.rpgsave', '.es3', '.slot', '.srm', '.dsv', '.co2', '.mca', '.mcr', '.nbt')
+  $junkFileRx = '^(cache|prefs?|config|settings?|setting|public_config|vpush|update|installer|unins.*|readme|license|manifest|report|crash.*|error.*)([._-].*)?$'
+  $noiseRx = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shadercache|shaders|bin|obj|lib|libs|redist|installer|installers|config|configs|settings|plugin|plugins|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets|registry)$'
+  $sysPathRx = '\\AppData\\Local\\|\\ProgramData\\Microsoft|\\Package Cache|\\DriverStore|\\Packages\\'
+  $vendorRx = '\\(Tencent|QQ|wechat|xwechat|thunder|HandBrake|RenPy|VClaw|Doubao|Geek Uninstaller|Netease|Baidu|Sogou|Adobe|JetBrains|Google|Mozilla|Apple|Discord|Slack|Zoom|Cursor|Electron|PowerShell|Modules|node_modules|Python|pip|WPS|Sublime|Git)(\\|$)'
   $map = @{}
   $idx = 0
   foreach ($root in $roots) {
@@ -613,12 +621,17 @@ function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
     if ($onStep) { & $onStep $root $idx $roots.Count }
     try {
       $fs = Get-ChildItem -LiteralPath $root -Recurse -Depth 5 -File -Force -ErrorAction SilentlyContinue |
-        Where-Object { (Test-IsSaveFile $_.Name) -and $_.Length -lt 300MB }
+        Where-Object { (Test-IsSaveFile $_.Name) -and $_.Length -ge $minFile -and $_.Length -lt 300MB }
     } catch { continue }
     foreach ($f in $fs) {
+      $bn = [IO.Path]::GetFileNameWithoutExtension($f.Name).ToLower()
+      if ($bn -match $junkFileRx) { continue }
       $dir = $f.Directory.FullName
       $dn = $f.Directory.Name.ToLower()
-      if (@($noise | Where-Object { $dn -eq $_ -or $dn.Contains($_ + 'cache') }).Count -gt 0) { continue }
+      if ($dn -match $noiseRx) { continue }
+      if ($dir -match $sysPathRx) { continue }
+      if ($dir -match $vendorRx) { continue }
+      if ($dir -match '\\Microsoft|\\Windows\\|\\Temp\\') { continue }
       if (-not $map.ContainsKey($dir)) { $map[$dir] = @() }
       $map[$dir] += $f
     }
@@ -626,16 +639,24 @@ function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
   $hits = @()
   foreach ($k in $map.Keys) {
     $arr = @($map[$k])
+    $sum = ($arr | Measure-Object Length -Sum).Sum
+    $strict = @($arr | Where-Object { $strictExt -contains $_.Extension.ToLower() })
+    if (-not (($strict.Count -gt 0) -or ($sum -ge $minBig))) { continue }
     $hits += [pscustomobject]@{
       Game      = (Split-Path -Leaf (Split-Path -Parent $k)) + '\' + (Split-Path -Leaf $k)
       Path      = $k
       SaveFiles = $arr
       SaveCount = $arr.Count
-      SizeKB    = [math]::Round((($arr | Measure-Object Length -Sum).Sum) / 1024)
+      SizeKB    = [math]::Round($sum / 1024)
       Last      = ($arr | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
     }
   }
-  return $hits | Sort-Object Last -Descending | Select-Object -First 300
+  # 父子目录只留最外层，避免同一个存档列出一堆子目录
+  $keep = @()
+  foreach ($h in ($hits | Sort-Object { $_.Path.Length })) {
+    if (@($keep | Where-Object { $h.Path.StartsWith($_.Path + '\') }).Count -eq 0) { $keep += $h }
+  }
+  return $keep | Sort-Object SizeKB -Descending | Select-Object -First 200
 }
 
 # ================= 界面 =================
