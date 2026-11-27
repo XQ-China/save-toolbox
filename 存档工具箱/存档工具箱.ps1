@@ -300,6 +300,24 @@ function Put-Many($cfg, $items, [string]$message) {
   return $nc.sha
 }
 
+# 删除仓库里的整个 存档/<游戏名>/ 目录，一次提交
+function Remove-RepoDir($cfg, [string]$dir, [string]$message) {
+  $base = 'https://api.github.com/repos/' + $cfg.repo
+  $ref = Invoke-RestMethod -Uri ($base + '/git/ref/heads/' + $cfg.branch) -Headers (Get-Headers $cfg) -Method Get
+  $parent = $ref.object.sha
+  $commit = Invoke-RestMethod -Uri ($base + '/git/commits/' + $parent) -Headers (Get-Headers $cfg) -Method Get
+  $tree = Invoke-RestMethod -Uri ($base + '/git/trees/' + $commit.tree.sha + '?recursive=1') -Headers (Get-Headers $cfg) -Method Get
+  $prefix = $dir + '/'
+  $blobs = @($tree.tree | Where-Object { $_.type -eq 'blob' -and ($_.path -eq $dir -or $_.path.StartsWith($prefix)) })
+  if ($blobs.Count -eq 0) { return 0 }
+  $del = @()
+  foreach ($b in $blobs) { $del += @{ path = $b.path; mode = '100644'; type = 'blob'; sha = $null } }
+  $nt = Invoke-RestMethod -Uri ($base + '/git/trees') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ base_tree = $commit.tree.sha; tree = $del } | ConvertTo-Json -Depth 6 -Compress)))
+  $nc = Invoke-RestMethod -Uri ($base + '/git/commits') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ message = $message; tree = $nt.sha; parents = @($parent) } | ConvertTo-Json -Depth 6 -Compress)))
+  Invoke-RestMethod -Uri ($base + '/git/refs/heads/' + $cfg.branch) -Headers (Get-Headers $cfg) -Method Patch -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ sha = $nc.sha; force = $false } | ConvertTo-Json -Compress))) | Out-Null
+  return $blobs.Count
+}
+
 function Upload-Saves($cfg, [string]$game, [string]$localDir, [string[]]$files, [scriptblock]$logFn) {
   try {
     $real = Resolve-UploadDir $cfg $game $localDir
@@ -989,8 +1007,8 @@ function Show-Gui {
   $btnPreview = New-Button '预览' 8 10 90 28
   $btnRestore = New-Button '开始还原' 106 10 110 28
   $btnClearBak = New-Button '清除备份' 224 10 110 28
-  $btnClearSave = New-Button '清除存档' 342 10 90 28
-  $lblDownTip = New-Label '先备份到 备份\<游戏名> 再动文件' 440 12 220
+  $btnClearSave = New-Button '清除云存档' 342 10 96 28
+  $lblDownTip = New-Label '勾哪行删哪行，只删云端，本地不动' 448 12 212
 
   $tbDlSearch = New-Box 56 44 240 26 ''
   $lblDlSearch = New-Label '搜索' 8 48 46
@@ -1248,40 +1266,31 @@ function Show-Gui {
     } catch { Write-Log ('清除失败：' + $_.Exception.Message) 'err' }
   })
 
-  # 清除本地存档：勾选的优先，没勾选就按预览列表全部
+  # 清除云存档：删仓库里的 存档/<游戏名>/（本地文件不动）。勾选的优先，没勾选就按预览列表全部
   $btnClearSave.Add_Click({
+    Apply-Form-To-Cfg
+    if (-not $cfg.repo) { Write-Log '先填 用户名/仓库名' 'err'; return }
     $plan = @($script:DlPlan)
-    if ($plan.Count -eq 0) { Write-Log '先点“预览”列出存档，再点清除' 'warn'; return }
+    if ($plan.Count -eq 0) { Write-Log '先点“预览”列出云端存档，再点清除云存档' 'warn'; return }
     $targets = @($dlGrid.SelectedRows | ForEach-Object { $_.Tag } | Where-Object { $_ })
     if ($targets.Count -eq 0) { $targets = $plan }
-    $live = @()
-    foreach ($it in $targets) {
-      $p = ''
-      if ($it.Target -and $it.File) { $p = Join-Path $it.Target $it.File }
-      if ($p -and (Test-Path -LiteralPath $p)) { $live += [pscustomobject]@{ Item = $it; Path = $p } }
-    }
-    if ($live.Count -eq 0) { Write-Log '这些位置没有本地存档文件，不用清' 'warn'; $status.Text = '没有可清除的'; return }
-    $bakRoot = $cfg.backup_dir
-    if (-not $bakRoot) { $bakRoot = Join-Path $script:Root '备份' }
-    $msg = ('会删除 ' + $live.Count + ' 个本地存档文件：' + [Environment]::NewLine + [Environment]::NewLine + (($live | ForEach-Object { $_.Item.Game + '  ' + $_.Path }) -join [Environment]::NewLine) + [Environment]::NewLine + [Environment]::NewLine + '删除前先备份到：' + [Environment]::NewLine + $bakRoot + [Environment]::NewLine + [Environment]::NewLine + '继续吗？')
-    $ans = [System.Windows.Forms.MessageBox]::Show($msg, '清除存档', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    $games = @($targets | ForEach-Object { $_.Game } | Where-Object { $_ -and $_ -ne '(读不了)' -and $_ -ne '未命名' } | Select-Object -Unique)
+    if ($games.Count -eq 0) { Write-Log '没有可清除的云端存档' 'warn'; return }
+    $msg = ('会从仓库 ' + $cfg.repo + ' 删掉这些目录：' + [Environment]::NewLine + [Environment]::NewLine + (($games | ForEach-Object { '存档/' + $_ }) -join [Environment]::NewLine) + [Environment]::NewLine + [Environment]::NewLine + '只删云端，你电脑里的存档文件不会动。' + [Environment]::NewLine + '继续吗？')
+    $ans = [System.Windows.Forms.MessageBox]::Show($msg, '清除云存档', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
     if ($ans -ne 'Yes') { return }
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $ok = 0; $bad = 0
-    foreach ($l in $live) {
+    foreach ($g in $games) {
       try {
-        if ($cfg.backup -eq 'yes') {
-          $bakDir = Join-Path (Join-Path $bakRoot $l.Item.Game) $stamp
-          if (-not (Test-Path -LiteralPath $bakDir)) { New-Item -ItemType Directory -Force -Path $bakDir | Out-Null }
-          Copy-Item -LiteralPath $l.Path -Destination (Join-Path $bakDir $l.Item.File) -Force
-        }
-        Remove-Item -LiteralPath $l.Path -Force
-        Write-Log ('[已清除] ' + $l.Item.Game + '  ' + $l.Path) 'ok'
+        $script:Active = $script:Active
+        $n = Remove-RepoDir $cfg ('存档/' + $g) ('删除 存档/' + $g)
+        Write-Log ('[已删除云端] 存档/' + $g + '（' + $n + ' 个文件）') 'ok'
         $ok++
-      } catch { Write-Log ('清除失败：' + $l.Path + ' · ' + $_.Exception.Message) 'err'; $bad++ }
+      } catch { Write-Log ('删除失败：存档/' + $g + ' · ' + $_.Exception.Message) 'err'; $bad++ }
     }
-    $status.Text = ('已清除 ' + $ok + ' 个')
-    Write-Log ('清除完成：成功 ' + $ok + ' 个，失败 ' + $bad + ' 个') $(if ($bad) { 'warn' } else { 'ok' })
+    $status.Text = ('云存档已清 ' + $ok + ' 个')
+    Write-Log ('清除云存档完成：成功 ' + $ok + ' 个，失败 ' + $bad + ' 个') $(if ($bad) { 'ok' } else { 'warn' })
+    try { $script:DlPlan = @(); $dlGrid.Rows.Clear(); $chkAll.Checked = $false } catch { }
   })
 
   # ---------- 仓库 / 上传 / 下载 ----------
