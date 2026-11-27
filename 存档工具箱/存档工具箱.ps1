@@ -1100,7 +1100,7 @@ function Show-Gui {
   $status.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 77)
   $form.Controls.Add($status)
 
-  $lblHint = New-Label '有些游戏收不到存档，请尽量' 12 576 178 20
+  $lblHint = New-Label '有些游戏搜不到存档，请尽量' 12 576 178 20
   $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(128, 137, 150)
   $lblHint.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $rail.Controls.Add($lblHint)
