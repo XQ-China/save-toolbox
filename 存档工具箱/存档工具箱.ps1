@@ -240,17 +240,16 @@ function Get-Norm([string]$t) {
 
 function New-Hit([string]$game, [string]$path, $files) {
   $pick = @($files | Where-Object { $script:SaveExts -contains $_.Extension.ToLower() })
-  if ($pick.Count -eq 0) { $pick = @($files) }
+  if ($pick.Count -eq 0) { return $null }
   return [pscustomobject]@{
     Game      = $game
     Path      = $path
     SaveFiles = @($pick)
     SaveCount = $pick.Count
     SizeKB    = [math]::Round((($pick | Measure-Object Length -Sum).Sum) / 1024)
-    Last      = ($files | Select-Object -First 1).LastWriteTime
+    Last      = ($pick | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
   }
 }
-
 function Get-SearchRoots {
   $roots = @()
   if ($env:APPDATA) { $roots += $env:APPDATA }
@@ -341,6 +340,68 @@ function Find-GameDirs([string]$keyword, $roots, [scriptblock]$onStep = $null) {
   return $uniq
 }
 
+function Find-GameDirs([string]$keyword, $roots, [scriptblock]$onStep = $null) {
+  $kw = $keyword.Trim().ToLower()
+  if (-not $kw) { return @() }
+
+  $terms = @(Get-Norm $kw)
+  foreach ($k in $global:SR_Aliases.Keys) {
+    $nk = Get-Norm $k
+    $nkw = Get-Norm $kw
+    if ($nk.Length -ge 2 -and ($nk.Contains($nkw) -or $nkw.Contains($nk))) {
+      foreach ($a in $global:SR_Aliases[$k]) { $terms += (Get-Norm $a) }
+    }
+  }
+  $weak = @('game', 'games', 'save', 'saves', 'data', 'files', 'user', 'player', 'players', 'saved', 'local', 'roaming')
+  $terms = $terms | Where-Object { $_ -and $_.Length -ge 3 -and $_ -notin $weak } | Select-Object -Unique
+  if (@($terms).Count -eq 0) { return @() }
+
+  $junkDir = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shaders|bin|obj|lib|libs|libraries|redist|installer|installers|config|configs|settings|recommendations|nvbackend|plugin|plugins|backup|backups|old|bak|pictures|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets|movies)$'
+  $junkPath = '\\NVIDIA Corporation\\|\\Microsoft\\|\\Windows\\|\\Temp\\'
+
+  $hits = @()
+  $idx = 0
+  foreach ($root in $roots) {
+    $idx++
+    if ($onStep) { & $onStep $root $idx $roots.Count }
+    try {
+      $dirs = Get-ChildItem -LiteralPath $root -Recurse -Depth 4 -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object {
+          $n = Get-Norm $_.Name
+          if ($n -match $junkDir) { return $false }
+          if ($_.FullName -match $junkPath) { return $false }
+          $hit = $false
+          foreach ($t in $terms) { if ($n.Contains($t)) { $hit = $true; break } }
+          $hit
+        }
+    } catch { continue }
+
+    foreach ($d in $dirs) {
+      try { $files = @(Get-ChildItem -LiteralPath $d.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $files = @() }
+      $h = if ($files.Count -gt 0) { New-Hit $d.Name $d.FullName $files } else { $null }
+      if ($h) { $hits += $h; continue }
+
+      try { $subs = Get-ChildItem -LiteralPath $d.FullName -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue } catch { $subs = @() }
+      foreach ($sd in $subs) {
+        $sn = Get-Norm $sd.Name
+        if ($sn -match $junkDir) { continue }
+        if ($sd.FullName -match $junkPath) { continue }
+        try { $sf = @(Get-ChildItem -LiteralPath $sd.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $sf = @() }
+        $h2 = if ($sf.Count -gt 0) { New-Hit ($d.Name + '\' + $sd.FullName.Substring($d.FullName.Length).TrimStart('\', '/')) $sd.FullName $sf } else { $null }
+        if ($h2) { $hits += $h2 }
+      }
+    }
+  }
+
+  $seen = @{}
+  $uniq = @()
+  foreach ($h in ($hits | Where-Object { $_ } | Sort-Object Last -Descending)) {
+    if ($seen.ContainsKey($h.Path)) { continue }
+    $seen[$h.Path] = 1
+    $uniq += $h
+  }
+  return $uniq
+}
 function Find-InPath([string]$path) {
   $hits = @()
   $base = $path.TrimEnd('\', '/')
