@@ -10,6 +10,7 @@
 # ==========================================================
 
 $ErrorActionPreference = 'Stop'
+$script:AppVer = 'v1.0.16'
 $script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:CfgPath = Join-Path $script:Root 'config.txt'
 
@@ -840,7 +841,7 @@ function Show-Gui {
 
   $form = New-Object System.Windows.Forms.Form
   $form.Text = '存档工具箱'
-  $form.ClientSize = New-Object System.Drawing.Size(900, 660)
+  $form.ClientSize = New-Object System.Drawing.Size(900, 686)
   $form.StartPosition = 'CenterScreen'
   $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $form.BackColor = [System.Drawing.Color]::FromArgb(246, 247, 249)
@@ -1097,6 +1098,16 @@ function Show-Gui {
   $status = New-Label '就绪' 206 610 500
   $status.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 77)
   $form.Controls.Add($status)
+
+  $lblNote = New-Label '有些游戏收不到存档，请尽量用文件夹名或英文名再搜一次' 206 630 660
+  $lblNote.ForeColor = [System.Drawing.Color]::FromArgb(128, 137, 150)
+  $lblNote.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+  $form.Controls.Add($lblNote)
+
+  $lblVer = New-Label ($script:AppVer) 206 648 660
+  $lblVer.ForeColor = [System.Drawing.Color]::FromArgb(150, 158, 170)
+  $lblVer.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+  $form.Controls.Add($lblVer)
 
   # ---------- 展开 / 收起 ----------
   function Apply-Active {
