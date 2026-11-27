@@ -608,19 +608,23 @@ function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
   # 只列像存档的目录：文件 >=1KB；含明确存档后缀，或目录总大小 >=256KB
   $minFile = 1024
   $minBig = 256KB
+  $saveNames = @('savegames', 'savegame', 'saved', 'save', 'saves', 'worlds', 'world', '世界')
   $strictExt = @('.sav', '.save', '.savx', '.wld', '.twld', '.tplr', '.plr', '.sgm', '.sl2', '.rvdata2',
                  '.rpgsave', '.es3', '.slot', '.srm', '.dsv', '.co2', '.mca', '.mcr', '.nbt')
   $junkFileRx = '^(cache|prefs?|config|settings?|setting|public_config|vpush|update|installer|unins.*|readme|license|manifest|report|crash.*|error.*)([._-].*)?$'
-  $noiseRx = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shadercache|shaders|bin|obj|lib|libs|redist|installer|installers|config|configs|settings|plugin|plugins|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets|registry)$'
+  $noiseRx = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shadercache|shaders|bin|obj|lib|libs|redist|installer|installers|config|configs|settings|plugin|plugins|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets|registry|vaultsave|structure)$'
   $sysPathRx = '\\AppData\\Local\\|\\ProgramData\\Microsoft|\\Package Cache|\\DriverStore|\\Packages\\'
   $vendorRx = '\\(Tencent|QQ|wechat|xwechat|thunder|HandBrake|RenPy|VClaw|Doubao|Geek Uninstaller|Netease|Baidu|Sogou|Adobe|JetBrains|Google|Mozilla|Apple|Discord|Slack|Zoom|Cursor|Electron|PowerShell|Modules|node_modules|Python|pip|WPS|Sublime|Git)(\\|$)'
+  $idRx = '^([0-9]{4,}|[0-9a-f]{32})$'
+
   $map = @{}
   $idx = 0
   foreach ($root in $roots) {
     $idx++
     if ($onStep) { & $onStep $root $idx $roots.Count }
+    $base = $root.TrimEnd('\', '/')
     try {
-      $fs = Get-ChildItem -LiteralPath $root -Recurse -Depth 5 -File -Force -ErrorAction SilentlyContinue |
+      $fs = Get-ChildItem -LiteralPath $base -Recurse -Depth 5 -File -Force -ErrorAction SilentlyContinue |
         Where-Object { (Test-IsSaveFile $_.Name) -and $_.Length -ge $minFile -and $_.Length -lt 300MB }
     } catch { continue }
     foreach ($f in $fs) {
@@ -636,14 +640,41 @@ function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
       $map[$dir] += $f
     }
   }
-  $hits = @()
+
+  # 数字目录/32位 GUID（Steam 账号、存档槽）并到上一级；太深的子目录不算独立候选
+  $norm = @{}
   foreach ($k in $map.Keys) {
-    $arr = @($map[$k])
+    $p = $k
+    while ($true) {
+      $leaf = Split-Path -Leaf $p
+      if ($leaf -match $idRx) { $p = Split-Path -Parent $p; continue }
+      break
+    }
+    $rel = ''
+    foreach ($root in $roots) {
+      $rb = $root.TrimEnd('\', '/')
+      if ($p.StartsWith($rb + '\')) { $rel = $p.Substring($rb.Length).TrimStart('\'); break }
+    }
+    $segs = @($rel -split '\\')
+    $leafNorm = (Get-Norm (Split-Path -Leaf $p))
+    $hasSaveName = $false
+    foreach ($sg in $segs) { if ($saveNames -contains (Get-Norm $sg)) { $hasSaveName = $true } }
+    if (($segs.Count -gt 2) -and (-not $hasSaveName) -and ($saveNames -notcontains $leafNorm)) { continue }
+    if (-not $norm.ContainsKey($p)) { $norm[$p] = @() }
+    $norm[$p] += $map[$k]
+  }
+
+  $hits = @()
+  foreach ($k in $norm.Keys) {
+    $arr = @($norm[$k] | Sort-Object FullName -Unique)
     $sum = ($arr | Measure-Object Length -Sum).Sum
     $strict = @($arr | Where-Object { $strictExt -contains $_.Extension.ToLower() })
     if (-not (($strict.Count -gt 0) -or ($sum -ge $minBig))) { continue }
+    $name = Split-Path -Leaf $k
+    $parentName = Split-Path -Leaf (Split-Path -Parent $k)
+    if ($parentName -and ($parentName -ne (Split-Path -Leaf ($k.TrimEnd('\'))) )) { }
     $hits += [pscustomobject]@{
-      Game      = (Split-Path -Leaf (Split-Path -Parent $k)) + '\' + (Split-Path -Leaf $k)
+      Game      = $(if ($saveNames -contains (Get-Norm $name)) { $parentName + '\' + $name } else { $name })
       Path      = $k
       SaveFiles = $arr
       SaveCount = $arr.Count
@@ -651,7 +682,7 @@ function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
       Last      = ($arr | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
     }
   }
-  # 父子目录只留最外层，避免同一个存档列出一堆子目录
+  # 父子只留最外层
   $keep = @()
   foreach ($h in ($hits | Sort-Object { $_.Path.Length })) {
     if (@($keep | Where-Object { $h.Path.StartsWith($_.Path + '\') }).Count -eq 0) { $keep += $h }
