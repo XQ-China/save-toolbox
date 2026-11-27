@@ -10,7 +10,7 @@
 # ==========================================================
 
 $ErrorActionPreference = 'Stop'
-$script:AppVer = 'v1.0.16'
+$script:AppVer = 'v1.0.17'
 $script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:CfgPath = Join-Path $script:Root 'config.txt'
 
@@ -876,7 +876,7 @@ function Show-Gui {
   # ---------- 左侧导航栏 ----------
   $rail = New-Object System.Windows.Forms.Panel
   $rail.Location = New-Object System.Drawing.Point(0, 0)
-  $rail.Size = New-Object System.Drawing.Size(196, 660)
+  $rail.Size = New-Object System.Drawing.Size(196, 686)
   $rail.BackColor = [System.Drawing.Color]::White
   $form.Controls.Add($rail)
 
@@ -1099,15 +1099,15 @@ function Show-Gui {
   $status.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 77)
   $form.Controls.Add($status)
 
-  $lblNote = New-Label '有些游戏收不到存档，请尽量用文件夹名或英文名再搜一次' 206 630 660
-  $lblNote.ForeColor = [System.Drawing.Color]::FromArgb(128, 137, 150)
-  $lblNote.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
-  $form.Controls.Add($lblNote)
+  $lblHint = New-Label "有些游戏收不到存档，`r`n搜不到就试文件夹名或英文名" 12 604 178 44
+  $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(128, 137, 150)
+  $lblHint.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+  $rail.Controls.Add($lblHint)
 
-  $lblVer = New-Label ($script:AppVer) 206 648 660
+  $lblVer = New-Label ($script:AppVer) 12 660 172 20
   $lblVer.ForeColor = [System.Drawing.Color]::FromArgb(150, 158, 170)
   $lblVer.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
-  $form.Controls.Add($lblVer)
+  $rail.Controls.Add($lblVer)
 
   # ---------- 展开 / 收起 ----------
   function Apply-Active {
