@@ -10,7 +10,7 @@
 # ==========================================================
 
 $ErrorActionPreference = 'Stop'
-$script:AppVer = 'v1.0.19'
+$script:AppVer = 'v1.0.20'
 $script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:CfgPath = Join-Path $script:Root 'config.txt'
 
@@ -841,7 +841,7 @@ function Show-Gui {
 
   $form = New-Object System.Windows.Forms.Form
   $form.Text = '存档工具箱'
-  $form.ClientSize = New-Object System.Drawing.Size(900, 660)
+  $form.ClientSize = New-Object System.Drawing.Size(900, 632)
   $form.StartPosition = 'CenterScreen'
   $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $form.BackColor = [System.Drawing.Color]::FromArgb(246, 247, 249)
@@ -876,7 +876,7 @@ function Show-Gui {
   # ---------- 左侧导航栏 ----------
   $rail = New-Object System.Windows.Forms.Panel
   $rail.Location = New-Object System.Drawing.Point(0, 0)
-  $rail.Size = New-Object System.Drawing.Size(196, 660)
+  $rail.Size = New-Object System.Drawing.Size(196, 632)
   $rail.BackColor = [System.Drawing.Color]::White
   $form.Controls.Add($rail)
 
@@ -1088,7 +1088,7 @@ function Show-Gui {
   # ---------- 日志（固定在下方） ----------
   $log = New-Object System.Windows.Forms.RichTextBox
   $log.Location = New-Object System.Drawing.Point(206, 400)
-  $log.Size = New-Object System.Drawing.Size(680, 200)
+  $log.Size = New-Object System.Drawing.Size(680, 222)
   $log.ReadOnly = $true
   $log.BackColor = [System.Drawing.Color]::White
   $log.Font = New-Object System.Drawing.Font('Consolas', 9)
@@ -1100,12 +1100,12 @@ function Show-Gui {
   $status.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 77)
   $form.Controls.Add($status)
 
-  $lblHint = New-Label '有些游戏搜不到，试文件夹名' 12 556 178 20
+  $lblHint = New-Label '有些游戏收不到存档，请尽量' 12 576 178 20
   $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(128, 137, 150)
   $lblHint.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $rail.Controls.Add($lblHint)
 
-  $lblVer = New-Label ($script:AppVer) 12 580 178 20
+  $lblVer = New-Label ($script:AppVer) 12 600 178 20
   $lblVer.ForeColor = [System.Drawing.Color]::FromArgb(150, 158, 170)
   $lblVer.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $rail.Controls.Add($lblVer)
