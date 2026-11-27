@@ -479,10 +479,10 @@ function Show-Gui {
   $bodyFind = New-Object System.Windows.Forms.Panel
   $bodyFind.Location = New-Object System.Drawing.Point(206, 40)
   $bodyFind.Size = New-Object System.Drawing.Size(680, 332)
-  $bodyFind.BackColor = $form.BackColor.Clone()
+  $bodyFind.BackColor = $form.BackColor
 
   $btnFind = New-Button '查找存档' 8 10 90 28
-  $btnFind.Default = $true
+  $form.AcceptButton = $btnFind
   $btnCand = New-Button '列出全部候选' 106 10 110 28
   $btnToUpload = New-Button '填入上传区' 224 10 110 28
   $lblFindTip = New-Label '选中一行后点“填入上传区”，会跳到上传页' 342 12 320
@@ -512,13 +512,13 @@ function Show-Gui {
   $gdFind.CellBorderStyle = 'SingleHorizontal'
   $gdFind.BackgroundColor = [System.Drawing.Color]::White
   $gdFind.GridColor = [System.Drawing.Color]::FromArgb(229, 231, 235)
-  $gdFind.ColumnHeadersHeightSizeMode = 'DisableUserResizing'
+  $gdFind.ColumnHeadersHeightSizeMode = 'DisableResizing'
   $gdFind.ColumnHeadersHeight = 22
   $gdFind.RowTemplate.Height = 22
   $gdFind.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $gdFind.DefaultCellStyle.Padding = New-Object System.Windows.Forms.Padding(0)
   $gdFind.ColumnHeadersDefaultCellStyle.Padding = New-Object System.Windows.Forms.Padding(2, 0, 0, 0)
-  foreach ($c in @(@('游戏', 140), @('存档文件', 100), @('大小', 55), @('存档位置', 295), @('状态', 70))) {
+  foreach ($c in @(@('游戏', 140), @('存档文件', 100), @('大小', 52), @('存档位置', 294), @('状态', 66))) {
     $colF = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
     $colF.HeaderText = [string]$c[0]
     $colF.Width = [int]$c[1]
@@ -534,7 +534,7 @@ function Show-Gui {
     }
   }
 
-  $gdFind.CellToolTipTextNeeded.Add({
+  $gdFind.add_CellToolTipTextNeeded({
     param($s2, $e2)
     if ($e2.RowIndex -lt 0 -or $e2.ColumnIndex -lt 0) { return }
     $v = $gdFind.Rows[$e2.RowIndex].Cells[$e2.ColumnIndex].Value
@@ -549,7 +549,7 @@ function Show-Gui {
   $bodyUp = New-Object System.Windows.Forms.Panel
   $bodyUp.Location = New-Object System.Drawing.Point(206, 40)
   $bodyUp.Size = New-Object System.Drawing.Size(680, 160)
-  $bodyUp.BackColor = $form.BackColor.Clone()
+  $bodyUp.BackColor = $form.BackColor
   $tbGameUp = New-Box 70 4 240 26 ''
   $tbDir = New-Box 70 36 340 26 ''
   $btnDir = New-Button '浏览…' 420 35 80 28
@@ -567,7 +567,7 @@ function Show-Gui {
   $bodyDown = New-Object System.Windows.Forms.Panel
   $bodyDown.Location = New-Object System.Drawing.Point(206, 40)
   $bodyDown.Size = New-Object System.Drawing.Size(680, 300)
-  $bodyDown.BackColor = $form.BackColor.Clone()
+  $bodyDown.BackColor = $form.BackColor
   $btnPreview = New-Button '预览' 8 10 90 28
   $btnRestore = New-Button '开始还原' 106 10 110 28
   $btnClearBak = New-Button '清除备份' 224 10 110 28
@@ -598,13 +598,13 @@ function Show-Gui {
   $dlGrid.CellBorderStyle = 'SingleHorizontal'
   $dlGrid.BackgroundColor = [System.Drawing.Color]::White
   $dlGrid.GridColor = [System.Drawing.Color]::FromArgb(229, 231, 235)
-  $dlGrid.ColumnHeadersHeightSizeMode = 'DisableUserResizing'
+  $dlGrid.ColumnHeadersHeightSizeMode = 'DisableResizing'
   $dlGrid.ColumnHeadersHeight = 22
   $dlGrid.RowTemplate.Height = 22
   $dlGrid.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $dlGrid.DefaultCellStyle.Padding = New-Object System.Windows.Forms.Padding(0)
   $dlGrid.ColumnHeadersDefaultCellStyle.Padding = New-Object System.Windows.Forms.Padding(2, 0, 0, 0)
-  foreach ($c in @(@('游戏', 150), @('存档文件', 145), @('会还原到', 295), @('状态', 70))) {
+  foreach ($c in @(@('游戏', 150), @('存档文件', 145), @('会还原到', 292), @('状态', 66))) {
     $col = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
     $col.HeaderText = [string]$c[0]
     $col.Width = [int]$c[1]
@@ -615,7 +615,7 @@ function Show-Gui {
     [void]$dlGrid.Columns.Add($col)
   }
 
-  $dlGrid.CellToolTipTextNeeded.Add({
+  $dlGrid.add_CellToolTipTextNeeded({
     param($s3, $e3)
     if ($e3.RowIndex -lt 0 -or $e3.ColumnIndex -lt 0) { return }
     $v = $dlGrid.Rows[$e3.RowIndex].Cells[$e3.ColumnIndex].Value
@@ -630,7 +630,7 @@ function Show-Gui {
   $bodyRepo = New-Object System.Windows.Forms.Panel
   $bodyRepo.Location = New-Object System.Drawing.Point(206, 40)
   $bodyRepo.Size = New-Object System.Drawing.Size(680, 104)
-  $bodyRepo.BackColor = $form.BackColor.Clone()
+  $bodyRepo.BackColor = $form.BackColor
   $tbRepo = New-Box 100 4 320 26 $cfg.repo
   $tbBranch = New-Box 100 36 140 26 $cfg.branch
   $tbToken = New-Box 100 68 320 26 $cfg.token
