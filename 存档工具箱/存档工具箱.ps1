@@ -129,7 +129,7 @@ function Put-File($cfg, [string]$repoPath, [string]$content, [string]$message) {
   $body = @{ message = $message; content = [Convert]::ToBase64String($bytes); branch = $cfg.branch }
   $sha = Get-RemoteSha $cfg $repoPath
   if ($sha) { $body['sha'] = $sha }
-  Invoke-RestMethod -Uri $url -Method Put -Headers (Get-Headers $cfg) -Body ($body | ConvertTo-Json -Compress) -ContentType 'application/json' | Out-Null
+  Invoke-RestMethod -Uri $url -Method Put -Headers (Get-Headers $cfg) -Body ([Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Compress))) -ContentType 'application/json; charset=utf-8' | Out-Null
 }
 
 function Put-BinaryFile($cfg, [string]$repoPath, [string]$localFile, [string]$message) {
@@ -138,7 +138,7 @@ function Put-BinaryFile($cfg, [string]$repoPath, [string]$localFile, [string]$me
   $body = @{ message = $message; content = [Convert]::ToBase64String($bytes); branch = $cfg.branch }
   $sha = Get-RemoteSha $cfg $repoPath
   if ($sha) { $body['sha'] = $sha }
-  Invoke-RestMethod -Uri $url -Method Put -Headers (Get-Headers $cfg) -Body ($body | ConvertTo-Json -Compress) -ContentType 'application/json' | Out-Null
+  Invoke-RestMethod -Uri $url -Method Put -Headers (Get-Headers $cfg) -Body ([Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Compress))) -ContentType 'application/json; charset=utf-8' | Out-Null
 }
 
 # ================= 下载 / 上传 =================
@@ -274,6 +274,24 @@ function Resolve-UploadDir($cfg, [string]$game, [string]$localDir) {
   return $hits[0]
 }
 
+# 一次提交写入多个文件（Git Data API），让每次存档都只留一条 commits
+function Put-Many($cfg, $items, [string]$message) {
+  $base = 'https://api.github.com/repos/' + $cfg.repo
+  $ref = Invoke-RestMethod -Uri ($base + '/git/ref/heads/' + $cfg.branch) -Headers (Get-Headers $cfg) -Method Get
+  $parent = $ref.object.sha
+  $commit = Invoke-RestMethod -Uri ($base + '/git/commits/' + $parent) -Headers (Get-Headers $cfg) -Method Get
+  $entries = @()
+  foreach ($it in @($items)) {
+    $blob = Invoke-RestMethod -Uri ($base + '/git/blobs') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ content = [Convert]::ToBase64String([byte[]]$it.bytes) } | ConvertTo-Json -Compress)))
+    $entries += @{ path = [string]$it.path; mode = '100644'; type = 'blob'; sha = $blob.sha }
+  }
+  if ($entries.Count -eq 0) { return $null }
+  $tree = Invoke-RestMethod -Uri ($base + '/git/trees') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ base_tree = $commit.tree.sha; tree = $entries } | ConvertTo-Json -Depth 6 -Compress)))
+  $nc = Invoke-RestMethod -Uri ($base + '/git/commits') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ message = $message; tree = $tree.sha; parents = @($parent) } | ConvertTo-Json -Depth 6 -Compress)))
+  Invoke-RestMethod -Uri ($base + '/git/refs/heads/' + $cfg.branch) -Headers (Get-Headers $cfg) -Method Patch -ContentType 'application/json' -Body (@{ sha = $nc.sha; force = $false } | ConvertTo-Json -Compress) | Out-Null
+  return $nc.sha
+}
+
 function Upload-Saves($cfg, [string]$game, [string]$localDir, [string[]]$files, [scriptblock]$logFn) {
   try {
     $real = Resolve-UploadDir $cfg $game $localDir
@@ -285,22 +303,25 @@ function Upload-Saves($cfg, [string]$game, [string]$localDir, [string[]]$files, 
     }
   } catch { }
   $dirRepo = '存档/' + $game
+  $items = @()
+  $ok = @()
   foreach ($f in $files) {
     $local = Join-Path $localDir $f
     if (-not (Test-Path -LiteralPath $local)) { & $logFn ("跳过（本地没有）：$f") 'warn'; continue }
-    Put-BinaryFile $cfg ($dirRepo + '/' + $f) $local ('上传存档 ' + $game + '/' + $f)
-    & $logFn ("已上传： $f") 'ok'
+    $items += @{ path = ($dirRepo + '/' + $f); bytes = [IO.File]::ReadAllBytes($local) }
+    $ok += $f
   }
+  if ($items.Count -eq 0) { & $logFn '没有可上传的文件' 'warn'; return }
   $meta = [ordered]@{
     name      = $game
     localPath = (ConvertTo-DestTemplate $localDir)
-    files     = @($files)
+    files     = @($ok)
     updated   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   }
-  Put-File $cfg ($dirRepo + '/meta.json') ($meta | ConvertTo-Json -Depth 5) ('更新 meta.json ' + $game)
-  & $logFn '已写入： meta.json' 'ok'
+  $items += @{ path = ($dirRepo + '/meta.json'); bytes = [Text.Encoding]::UTF8.GetBytes(($meta | ConvertTo-Json -Depth 5)) }
+  Put-Many $cfg $items ('存档/' + $game) | Out-Null
+  & $logFn ('已提交：存档/' + $game + '（' + $ok.Count + ' 个文件 + meta.json）') 'ok'
 }
-
 function Rebuild-Readme($cfg) {
   $tree = Get-Tree $cfg
   $rows = @()
