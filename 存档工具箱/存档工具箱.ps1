@@ -40,7 +40,7 @@ $global:SR_Aliases = @{
 }
 
 $script:SaveExts = @('.sav', '.save', '.es3', '.slot', '.sgm', '.plr', '.wld', '.rvdata2', '.rpgsave', '.sl2', '.dat',
-  '.json', '.cfg', '.xml', '.profile', '.savx')
+  '.json', '.cfg', '.xml', '.profile', '.savx', '.mca', '.mcr', '.nbt', '.ldb')
 
 # ================= 配置 =================
 function Read-Config([string]$path) {
@@ -289,7 +289,7 @@ function New-HitFromDir([string]$label, [string]$path) {
 
 # ===== SteamID 识别：纯数字 15~17 位就是 ID，000…0 / 999…9 当成占位 =====
 $script:SteamIdRx = '^[0-9]{15,17}$'
-$script:SavNames = @('savegames', 'savegame', 'saved', 'save', 'saves')
+$script:SavNames = @('savegames', 'savegame', 'saved', 'save', 'saves', 'worlds', 'world', '世界')
 
 function Test-HasSaveFiles([string]$p) {
   try {
@@ -377,7 +377,7 @@ function Get-SaveNode([string]$path, [int]$depth = 0) {
   }
 
   $leaf = Get-Norm (Split-Path -Leaf $path)
-  if (($script:SavNames -contains $leaf) -and (Test-HasSaveFiles $path)) { return [pscustomobject]@{ Path = $path; Strong = $true } }
+  if ($script:SavNames -contains $leaf) { return [pscustomobject]@{ Path = $path; Strong = $true } }
   if (Test-HasSaveFiles $path) { return [pscustomobject]@{ Path = $path; Strong = $false } }
   return $null
 }
@@ -450,7 +450,7 @@ function Find-GameDirs([string]$keyword, [scriptblock]$onStep = $null) {
   $terms = @($terms | Where-Object { $_ -and $_.Length -ge 3 -and $_ -notin $weak } | Select-Object -Unique)
   if ($terms.Count -eq 0) { return @() }
 
-  $saveNames = @('savegames', 'savegame', 'saved', 'save', 'saves')
+  $saveNames = @('savegames', 'savegame', 'saved', 'save', 'saves', 'worlds', 'world', '世界')
   $junkDir = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shaders|bin|obj|lib|libs|libraries|redist|installer|installers|config|configs|settings|recommendations|nvbackend|plugin|plugins|pictures|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets)$'
   $junkPath = '\\AppData\\Local\\|\\NVIDIA Corporation\\|\\Microsoft\\|\\Windows\\|\\Temp\\'
 
@@ -477,6 +477,18 @@ function Find-GameDirs([string]$keyword, [scriptblock]$onStep = $null) {
           $h.Path = $node.Path
           $h | Add-Member -NotePropertyName Strong -NotePropertyValue $node.Strong -Force
           $out += $h
+          continue
+        }
+        # 节点本身没有存档文件：下层每个有文件的文件夹各算一条（如 Minecraft\saves\<世界名>）
+        $ckids = @()
+        try { $ckids = @(Get-ChildItem -LiteralPath $node.Path -Directory -Force -ErrorAction SilentlyContinue) } catch { $ckids = @() }
+        foreach ($c in $ckids) {
+          $hc = New-HitFromDir ($d.Name + '\' + $c.Name) $c.FullName
+          if ($hc) {
+            $hc.Path = $c.FullName
+            $hc | Add-Member -NotePropertyName Strong -NotePropertyValue $true -Force
+            $out += $hc
+          }
         }
         continue
       }
@@ -498,6 +510,7 @@ function Find-GameDirs([string]$keyword, [scriptblock]$onStep = $null) {
     }
     return $out
   }
+
 $pool = @()
 
   # 一、游戏安装目录：优先找 SaveGames / Saved / Save / Saves
@@ -556,6 +569,13 @@ function Find-InPath([string]$path) {
   if ($node) {
     $h = New-HitFromDir (Split-Path -Leaf $node.Path) $node.Path
     if ($h) { $hits += $h }
+    else {
+      try { $ck = @(Get-ChildItem -LiteralPath $node.Path -Directory -Force -ErrorAction SilentlyContinue) } catch { $ck = @() }
+      foreach ($c in $ck) {
+        $hc = New-HitFromDir ($c.Name) $c.FullName
+        if ($hc) { $hits += $hc }
+      }
+    }
   }
   try { $subs = @(Get-ChildItem -LiteralPath $base -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue) } catch { $subs = @() }
   foreach ($sd in $subs) {
@@ -564,7 +584,13 @@ function Find-InPath([string]$path) {
     $h2 = New-HitFromDir ($sd.FullName.Substring($base.Length).TrimStart('\', '/')) $node2.Path
     if ($h2) { $hits += $h2 }
   }
-  return $hits | Sort-Object Last -Descending
+  $keep = @()
+  foreach ($h in ($hits | Sort-Object { $_.Path.Length })) {
+    if (@($keep | Where-Object { $h.Path.StartsWith($_.Path + '\') }).Count -eq 0) { $keep += $h }
+  }
+  $uniq = @(); $seen = @{}
+  foreach ($h in ($keep | Sort-Object Last -Descending)) { if (-not $seen.ContainsKey($h.Path)) { $seen[$h.Path] = 1; $uniq += $h } }
+  return $uniq
 }
 function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
   $noise = @('cache', 'cachedata', 'logs', 'log', 'crash', 'crashes', 'temp', 'tmp', 'shader', 'shadercache', 'backup')
