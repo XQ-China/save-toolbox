@@ -842,6 +842,8 @@ function Show-Gui {
   $form = New-Object System.Windows.Forms.Form
   $form.Text = '存档工具箱'
   $form.ClientSize = New-Object System.Drawing.Size(900, 632)
+  $icoFile = Join-Path $script:Root '存档工具箱.ico'
+  if (Test-Path -LiteralPath $icoFile) { try { $form.Icon = New-Object System.Drawing.Icon($icoFile) } catch { } }
   $form.StartPosition = 'CenterScreen'
   $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $form.BackColor = [System.Drawing.Color]::FromArgb(246, 247, 249)
