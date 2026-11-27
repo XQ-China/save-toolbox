@@ -104,14 +104,20 @@ function Get-Tree($cfg) {
   return $res.tree
 }
 
-function Get-RawText($cfg, [string]$repoPath) {
+# 取文件原始字节：走 contents JSON 的 base64 字段，避免 raw 媒体类型在某些情况下回 base64 文本
+function Get-RemoteBytes($cfg, [string]$repoPath) {
   $url = 'https://api.github.com/repos/' + $cfg.repo + '/contents/' + (ConvertTo-RepoPath $repoPath) + '?ref=' + $cfg.branch
-  $res = Invoke-WebRequest -Uri $url -Headers (Get-Headers $cfg 'application/vnd.github.raw') -Method Get -UseBasicParsing
-  try {
-    $ms = $res.RawContentStream
-    if ($ms) { return [Text.Encoding]::UTF8.GetString($ms.ToArray()) }
-  } catch { }
-  return [string]$res.Content
+  $res = Invoke-RestMethod -Uri $url -Headers (Get-Headers $cfg 'application/vnd.github+json') -Method Get
+  if ($res.content) { return , [Convert]::FromBase64String(($res.content -replace '\s', '')) }
+  if ($res.sha) {
+    $b = Invoke-RestMethod -Uri ('https://api.github.com/repos/' + $cfg.repo + '/git/blobs/' + $res.sha) -Headers (Get-Headers $cfg) -Method Get
+    if ($b.content) { return , [Convert]::FromBase64String(($b.content -replace '\s', '')) }
+  }
+  throw ('读不到文件内容：' + $repoPath)
+}
+
+function Get-RawText($cfg, [string]$repoPath) {
+  return [Text.Encoding]::UTF8.GetString((Get-RemoteBytes $cfg $repoPath))
 }
 
 function Get-RemoteSha($cfg, [string]$repoPath) {
@@ -235,7 +241,9 @@ function Download-Item($cfg, $item) {
     if (-not (Test-Path -LiteralPath $bakDir)) { New-Item -ItemType Directory -Force -Path $bakDir | Out-Null }
     Copy-Item -LiteralPath $out -Destination (Join-Path $bakDir $item.File) -Force
   }
-  Invoke-WebRequest -Uri $url -Headers (Get-Headers $cfg 'application/vnd.github.raw') -OutFile $out -UseBasicParsing | Out-Null
+  $bytes = Get-RemoteBytes $cfg $item.RepoPath
+  if (-not $bytes -or $bytes.Length -eq 0) { throw '下载内容为空' }
+  [IO.File]::WriteAllBytes($out, $bytes)
   return $out
 }
 
@@ -282,7 +290,7 @@ function Put-Many($cfg, $items, [string]$message) {
   $commit = Invoke-RestMethod -Uri ($base + '/git/commits/' + $parent) -Headers (Get-Headers $cfg) -Method Get
   $entries = @()
   foreach ($it in @($items)) {
-    $blob = Invoke-RestMethod -Uri ($base + '/git/blobs') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ content = [Convert]::ToBase64String([byte[]]$it.bytes) } | ConvertTo-Json -Compress)))
+    $blob = Invoke-RestMethod -Uri ($base + '/git/blobs') -Headers (Get-Headers $cfg) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ content = [Convert]::ToBase64String([byte[]]$it.bytes); encoding = 'base64' } | ConvertTo-Json -Compress)))
     $entries += @{ path = [string]$it.path; mode = '100644'; type = 'blob'; sha = $blob.sha }
   }
   if ($entries.Count -eq 0) { return $null }
@@ -981,7 +989,8 @@ function Show-Gui {
   $btnPreview = New-Button '预览' 8 10 90 28
   $btnRestore = New-Button '开始还原' 106 10 110 28
   $btnClearBak = New-Button '清除备份' 224 10 110 28
-  $lblDownTip = New-Label '还原前先备份到 备份\<游戏名>' 342 12 320
+  $btnClearSave = New-Button '清除存档' 342 10 90 28
+  $lblDownTip = New-Label '先备份到 备份\<游戏名> 再动文件' 440 12 220
 
   $tbDlSearch = New-Box 56 44 240 26 ''
   $lblDlSearch = New-Label '搜索' 8 48 46
@@ -1032,7 +1041,7 @@ function Show-Gui {
     if ($v) { $e3.ToolTipText = [string]$v }
   })
 
-  $bodyDown.Controls.AddRange(@($btnPreview, $btnRestore, $btnClearBak, $lblDownTip,
+  $bodyDown.Controls.AddRange(@($btnPreview, $btnRestore, $btnClearBak, $btnClearSave, $lblDownTip,
       $tbDlSearch, $lblDlSearch, $lblDlSearchTip, $lblDownList, $dlGrid, $chkAll))
   $chkAll.BringToFront()
 
@@ -1237,6 +1246,42 @@ function Show-Gui {
       Clear-BackupFolder ([pscustomobject]@{ backup_dir = $root }) { param($t, $k) Write-Log $t $k } | Out-Null
       $status.Text = '备份已清空'
     } catch { Write-Log ('清除失败：' + $_.Exception.Message) 'err' }
+  })
+
+  # 清除本地存档：勾选的优先，没勾选就按预览列表全部
+  $btnClearSave.Add_Click({
+    $plan = @($script:DlPlan)
+    if ($plan.Count -eq 0) { Write-Log '先点“预览”列出存档，再点清除' 'warn'; return }
+    $targets = @($dlGrid.SelectedRows | ForEach-Object { $_.Tag } | Where-Object { $_ })
+    if ($targets.Count -eq 0) { $targets = $plan }
+    $live = @()
+    foreach ($it in $targets) {
+      $p = ''
+      if ($it.Target -and $it.File) { $p = Join-Path $it.Target $it.File }
+      if ($p -and (Test-Path -LiteralPath $p)) { $live += [pscustomobject]@{ Item = $it; Path = $p } }
+    }
+    if ($live.Count -eq 0) { Write-Log '这些位置没有本地存档文件，不用清' 'warn'; $status.Text = '没有可清除的'; return }
+    $bakRoot = $cfg.backup_dir
+    if (-not $bakRoot) { $bakRoot = Join-Path $script:Root '备份' }
+    $msg = ('会删除 ' + $live.Count + ' 个本地存档文件：' + [Environment]::NewLine + [Environment]::NewLine + (($live | ForEach-Object { $_.Item.Game + '  ' + $_.Path }) -join [Environment]::NewLine) + [Environment]::NewLine + [Environment]::NewLine + '删除前先备份到：' + [Environment]::NewLine + $bakRoot + [Environment]::NewLine + [Environment]::NewLine + '继续吗？')
+    $ans = [System.Windows.Forms.MessageBox]::Show($msg, '清除存档', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    if ($ans -ne 'Yes') { return }
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $ok = 0; $bad = 0
+    foreach ($l in $live) {
+      try {
+        if ($cfg.backup -eq 'yes') {
+          $bakDir = Join-Path (Join-Path $bakRoot $l.Item.Game) $stamp
+          if (-not (Test-Path -LiteralPath $bakDir)) { New-Item -ItemType Directory -Force -Path $bakDir | Out-Null }
+          Copy-Item -LiteralPath $l.Path -Destination (Join-Path $bakDir $l.Item.File) -Force
+        }
+        Remove-Item -LiteralPath $l.Path -Force
+        Write-Log ('[已清除] ' + $l.Item.Game + '  ' + $l.Path) 'ok'
+        $ok++
+      } catch { Write-Log ('清除失败：' + $l.Path + ' · ' + $_.Exception.Message) 'err'; $bad++ }
+    }
+    $status.Text = ('已清除 ' + $ok + ' 个')
+    Write-Log ('清除完成：成功 ' + $ok + ' 个，失败 ' + $bad + ' 个') $(if ($bad) { 'warn' } else { 'ok' })
   })
 
   # ---------- 仓库 / 上传 / 下载 ----------
