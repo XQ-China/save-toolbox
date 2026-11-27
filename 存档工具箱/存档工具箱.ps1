@@ -251,7 +251,39 @@ function Clear-BackupFolder($cfg, [scriptblock]$logFn) {
   return $files.Count
 }
 
+# 仓库里已经有同一个存档位置：沿用原来的文件夹名，直接覆盖（不新建目录、不产生重复条目）
+function Resolve-UploadDir($cfg, [string]$game, [string]$localDir) {
+  $tpl = (ConvertTo-DestTemplate $localDir).TrimEnd('\', '/').ToLower()
+  if (-not $tpl) { return $game }
+  try { $tree = Get-Tree $cfg } catch { return $game }
+  $hits = @()
+  foreach ($m in @($tree | Where-Object { $_.type -eq 'blob' -and $_.path -match 'meta\.json$' })) {
+    if ($m.path.LastIndexOf('/') -lt 0) { continue }
+    $dir = $m.path.Substring(0, $m.path.LastIndexOf('/'))
+    $leaf = $dir.Split('/')[-1]
+    if (-not $leaf) { continue }
+    if ($leaf -eq $game) { return $game }
+    $txt = ''
+    try { $txt = [string](Get-RawText $cfg $m.path) } catch { continue }
+    if ($txt -notmatch '"localPath"\s*:\s*"((?:[^"\\]|\\.)*)"') { continue }
+    $lp = (($matches[1] -replace '\\\\', '\').TrimEnd('\', '/')).ToLower()
+    if ($lp -eq $tpl) { $hits += $leaf }
+  }
+  if ($hits.Count -eq 0) { return $game }
+  foreach ($h in $hits) { if ($h -match '[^\x00-\x7F]') { return $h } }
+  return $hits[0]
+}
+
 function Upload-Saves($cfg, [string]$game, [string]$localDir, [string[]]$files, [scriptblock]$logFn) {
+  try {
+    $real = Resolve-UploadDir $cfg $game $localDir
+    if ($real -and $real -ne $game) {
+      & $logFn ('仓库里已有同一位置：' + $real + '，直接覆盖') 'warn'
+      $game = $real
+    } else {
+      & $logFn ('覆盖目标：存档/' + $game) 'info'
+    }
+  } catch { }
   $dirRepo = '存档/' + $game
   foreach ($f in $files) {
     $local = Join-Path $localDir $f
@@ -274,7 +306,15 @@ function Rebuild-Readme($cfg) {
   $rows = @()
   foreach ($m in ($tree | Where-Object { $_.type -eq 'blob' -and $_.path -match 'meta\.json$' })) {
     try {
-      $meta = (Get-RawText $cfg $m.path) | ConvertFrom-Json
+      $txt = [string](Get-RawText $cfg $m.path)
+      $meta = $null
+      try { $meta = $txt | ConvertFrom-Json } catch { $meta = $null }
+      if (-not $meta) {
+        $meta = [pscustomobject]@{ name = ''; localPath = ''; files = @() }
+        if ($txt -match '"name"\s*:\s*"([^"]*)"') { $meta.name = $matches[1] }
+        if ($txt -match '"localPath"\s*:\s*"((?:[^"\\]|\\.)*)"') { $meta.localPath = $matches[1] -replace '\\\\', '\' }
+        if ($txt -match '"files"\s*:\s*\[([^\]]*)\]') { $meta.files = @([regex]::Matches($matches[1], '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }) }
+      }
       $dir = ''
       $i = $m.path.LastIndexOf('/')
       if ($i -ge 0) { $dir = $m.path.Substring(0, $i) }
