@@ -40,8 +40,20 @@ $global:SR_Aliases = @{
 }
 
 $script:SaveExts = @('.sav', '.save', '.es3', '.slot', '.sgm', '.plr', '.wld', '.rvdata2', '.rpgsave', '.sl2', '.dat',
-  '.json', '.cfg', '.xml', '.profile', '.savx', '.mca', '.mcr', '.nbt', '.ldb')
+  '.json', '.cfg', '.xml', '.profile', '.savx', '.mca', '.mcr', '.nbt', '.ldb', '.twld', '.tplr')
 
+# 判断是不是存档文件：正常后缀，或 xxx.wld.bak / .bak2 这种备份双后缀
+function Test-IsSaveFile([string]$name) {
+  if (-not $name) { return $false }
+  $n = $name.ToLower()
+  $last = [IO.Path]::GetExtension($n)
+  if ($script:SaveExts -contains $last) { return $true }
+  if (@('.bak', '.bak1', '.bak2', '.bak3', '.old', '.orig', '.backup', '.tmp') -contains $last) {
+    $inner = [IO.Path]::GetExtension([IO.Path]::GetFileNameWithoutExtension($n))
+    if ($script:SaveExts -contains $inner) { return $true }
+  }
+  return $false
+}
 # ================= 配置 =================
 function Read-Config([string]$path) {
   $cfg = [ordered]@{ repo = ''; branch = 'main'; token = ''; dest_root = ''; backup = 'yes'; backup_dir = '' }
@@ -240,7 +252,7 @@ function Get-Norm([string]$t) {
 }
 
 function New-Hit([string]$game, [string]$path, $files) {
-  $pick = @($files | Where-Object { $script:SaveExts -contains $_.Extension.ToLower() })
+  $pick = @($files | Where-Object { Test-IsSaveFile $_.Name })
   if ($pick.Count -eq 0) { return $null }
   return [pscustomobject]@{
     Game      = $game
@@ -294,7 +306,7 @@ $script:SavNames = @('savegames', 'savegame', 'saved', 'save', 'saves', 'worlds'
 function Test-HasSaveFiles([string]$p) {
   try {
     return @(Get-ChildItem -LiteralPath $p -File -Force -ErrorAction SilentlyContinue |
-      Where-Object { $script:SaveExts -contains $_.Extension.ToLower() -and $_.Length -lt 300MB }).Count -gt 0
+      Where-Object { (Test-IsSaveFile $_.Name) -and $_.Length -lt 300MB }).Count -gt 0
   } catch { return $false }
 }
 
@@ -601,7 +613,7 @@ function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
     if ($onStep) { & $onStep $root $idx $roots.Count }
     try {
       $fs = Get-ChildItem -LiteralPath $root -Recurse -Depth 5 -File -Force -ErrorAction SilentlyContinue |
-        Where-Object { $script:SaveExts -contains $_.Extension.ToLower() -and $_.Length -lt 300MB }
+        Where-Object { (Test-IsSaveFile $_.Name) -and $_.Length -lt 300MB }
     } catch { continue }
     foreach ($f in $fs) {
       $dir = $f.Directory.FullName
