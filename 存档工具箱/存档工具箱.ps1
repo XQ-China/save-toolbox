@@ -106,7 +106,12 @@ function Get-Tree($cfg) {
 
 function Get-RawText($cfg, [string]$repoPath) {
   $url = 'https://api.github.com/repos/' + $cfg.repo + '/contents/' + (ConvertTo-RepoPath $repoPath) + '?ref=' + $cfg.branch
-  return Invoke-RestMethod -Uri $url -Headers (Get-Headers $cfg 'application/vnd.github.raw') -Method Get
+  $res = Invoke-WebRequest -Uri $url -Headers (Get-Headers $cfg 'application/vnd.github.raw') -Method Get -UseBasicParsing
+  try {
+    $ms = $res.RawContentStream
+    if ($ms) { return [Text.Encoding]::UTF8.GetString($ms.ToArray()) }
+  } catch { }
+  return [string]$res.Content
 }
 
 function Get-RemoteSha($cfg, [string]$repoPath) {
@@ -147,13 +152,36 @@ function Build-Plan($cfg, $tree) {
     $dir = ''
     $i = $m.path.LastIndexOf('/')
     if ($i -ge 0) { $dir = $m.path.Substring(0, $i) }
-    try { $meta = (Get-RawText $cfg $m.path) | ConvertFrom-Json }
-    catch {
-      $plan += [pscustomobject]@{ Game = '(读不了)'; File = $m.path; Target = ''; RepoPath = $m.path; State = 'meta 解析失败' }
-      continue
+    $txt = [string](Get-RawText $cfg $m.path)
+    $meta = $null
+    try { $meta = $txt | ConvertFrom-Json } catch { $meta = $null }
+    if (-not $meta -or -not $meta.localPath) {
+      if (-not $meta) { $meta = [pscustomobject]@{ name = ''; localPath = ''; files = @() } }
+      if ($txt -match '"name"\s*:\s*"([^"]*)"') { $meta.name = $matches[1] }
+      if (-not $meta.localPath) {
+        $seg = $dir.Split('/')[-1]
+        if ($txt -match '"localPath"\s*:\s*"((?:[^"\\]|\\.)*)"') {
+          $lp = $matches[1] -replace '\\\\', '\'
+          $meta.localPath = $lp
+        } elseif ($seg -and $seg -ne '存档') {
+          $meta.localPath = ''
+        }
+      }
+      if (-not $meta.files -or @($meta.files).Count -eq 0) {
+        if ($txt -match '"files"\s*:\s*\[([^\]]*)\]') {
+          $meta.files = @([regex]::Matches($matches[1], '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+        }
+      }
     }
     $name = $meta.name
-    if (-not $name) { $name = if ($dir) { Split-Path -Leaf $dir } else { '未命名' } }
+    if (-not $name) {
+      if ($dir) {
+        $seg = $dir.Split('/')[-1]
+        if ($seg -eq '存档' -and $dir.Split('/').Count -ge 2) { $seg = $dir.Split('/')[-2] }
+        if (-not $seg) { $seg = $dir.Split('/')[-1] }
+        $name = $seg
+      } else { $name = '未命名' }
+    }
     $dest = $meta.localPath
     if (-not $dest) { $dest = $cfg.dest_root }
     if (-not $dest) {
@@ -163,6 +191,10 @@ function Build-Plan($cfg, $tree) {
     $dest = [Environment]::ExpandEnvironmentVariables($dest).TrimEnd('\', '/')
     $dest = Expand-SteamIdPath $dest
     $files = @($meta.files)
+    if ((-not $files -or $files.Count -eq 0) -and $dir) {
+      $prefix = $dir + '/'
+      $files = @($paths.Keys | Where-Object { $_ -like ($prefix + '*') -and $_ -notmatch 'meta\.json$' } | ForEach-Object { $_.Substring($prefix.Length) })
+    }
     if (-not $files -or $files.Count -eq 0) {
       $plan += [pscustomobject]@{ Game = $name; File = '(空)'; Target = $dest; RepoPath = $m.path; State = 'meta 里没有文件' }
       continue
@@ -175,7 +207,20 @@ function Build-Plan($cfg, $tree) {
       $plan += [pscustomobject]@{ Game = $name; File = $f; Target = $dest; RepoPath = $repoPath; State = $state }
     }
   }
-  return $plan
+  # 同一个目标 + 同一个文件的多条记录合并成一条（优先留中文名那条）
+  $out = @(); $seen = @{}
+  foreach ($p in $plan) {
+    $key = $p.Target + '|' + $p.File
+    if (-not $p.Target) { $key = 'R|' + $p.RepoPath }
+    if ($seen.ContainsKey($key)) {
+      $idx = $seen[$key]
+      if ($out[$idx].Game -notmatch '[^\x00-\x7F]' -and $p.Game -match '[^\x00-\x7F]') { $out[$idx] = $p }
+      continue
+    }
+    $seen[$key] = $out.Count
+    $out += $p
+  }
+  return $out
 }
 
 function Download-Item($cfg, $item) {
@@ -410,7 +455,12 @@ function Expand-SteamIdPath([string]$dest) {
   } elseif ($segIdx -gt 0) {
     $parent = (@($parts[0..($segIdx - 1)]) -join '\')
   }
-  $realId = Pick-SteamId $parent
+  $realId = $null
+  if ($parent -and (Test-Path -LiteralPath $parent)) {
+    $ids = @(Get-IdDirs $parent)
+    $pick = Pick-IdDir $ids
+    if ($pick) { $realId = $pick.Name }
+  }
 
   if ($hasPh) {
     if ($realId) { return ($dest -replace '(?i)\{STEAMID\}', $realId) }
