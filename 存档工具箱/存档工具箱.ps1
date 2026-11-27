@@ -250,97 +250,52 @@ function New-Hit([string]$game, [string]$path, $files) {
     Last      = ($pick | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
   }
 }
+function Get-GameRoots {
+  $r = @()
+  try { $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { $_.Root -match '^[A-Za-z]:' } } catch { $drives = @() }
+  foreach ($dr in $drives) {
+    foreach ($sub in @('Game', 'Games', '游戏', 'SteamLibrary\steamapps\common',
+                       'Program Files (x86)\Steam\steamapps\common', 'Program Files\Steam\steamapps\common',
+                       'Epic Games', 'WeGameApps', 'XboxGames')) {
+      $p = Join-Path $dr.Root $sub
+      if (Test-Path -LiteralPath $p) { $r += $p }
+    }
+  }
+  try {
+    $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath
+    if ($steam) { $p = Join-Path $steam 'steamapps\common'; if (Test-Path -LiteralPath $p) { $r += $p } }
+  } catch { }
+  return $r | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+}
+
 function Get-SearchRoots {
   $roots = @()
-  if ($env:APPDATA) { $roots += $env:APPDATA }
-  if ($env:LOCALAPPDATA) { $roots += $env:LOCALAPPDATA }
   if ($env:USERPROFILE) {
     $roots += (Join-Path $env:USERPROFILE 'AppData\LocalLow')
+    $roots += (Join-Path $env:USERPROFILE 'AppData\Roaming')
     $roots += (Join-Path $env:USERPROFILE 'Saved Games')
   }
   $docs = [Environment]::GetFolderPath('MyDocuments')
-  if ($docs) { $roots += $docs }
-  try {
-    $steam = (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath
-    if ($steam -and (Test-Path -LiteralPath $steam)) {
-      $roots += (Join-Path $steam 'steamapps\common')
-      $roots += (Join-Path $steam 'userdata')
-    }
-  } catch { }
-  try { $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { $_.Root -match '^[A-Za-z]:' } } catch { $drives = @() }
-  foreach ($d in $drives) {
-    foreach ($sub in @('Games', 'Game', '游戏', 'SteamLibrary', 'Epic Games', 'WeGameApps', 'XboxGames',
-                       'Program Files (x86)\Steam\steamapps\common', 'Program Files\Steam\steamapps\common')) {
-      $p = Join-Path $d.Root $sub
-      if (Test-Path -LiteralPath $p) { $roots += $p }
-    }
-  }
+  if ($docs) { $roots += $docs; $roots += (Join-Path $docs 'My Games') }
   return $roots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
 }
 
-function Find-GameDirs([string]$keyword, $roots, [scriptblock]$onStep = $null) {
-  $kw = $keyword.Trim().ToLower()
-  if (-not $kw) { return @() }
-
-  $terms = @(Get-Norm $kw)
-  if (-not $global:SR_Strict) {
-    foreach ($w in ($kw -split '[^\p{L}\p{N}]')) { if ($w.Length -ge 4) { $terms += (Get-Norm $w) } }
-  }
-  foreach ($k in $global:SR_Aliases.Keys) {
-    $nk = Get-Norm $k
-    $nkw = Get-Norm $kw
-    if ($nk.Contains($nkw) -or $nkw.Contains($nk)) {
-      foreach ($a in $global:SR_Aliases[$k]) {
-        $terms += (Get-Norm $a)
-        if (-not $global:SR_Strict) { foreach ($w in ($a -split '[^\p{L}\p{N}]')) { if ($w.Length -ge 4) { $terms += (Get-Norm $w) } } }
-      }
-    }
-  }
-  $weak = @('game', 'games', 'save', 'saves', 'data', 'files', 'user', 'player', 'players')
-  $terms = $terms | Where-Object { $_ -and $_ -notin $weak } | Select-Object -Unique
-
-  $hits = @()
-  $idx = 0
-  foreach ($root in $roots) {
-    $idx++
-    if ($onStep) { & $onStep $root $idx $roots.Count }
-    try {
-      $dirs = Get-ChildItem -LiteralPath $root -Recurse -Depth 4 -Directory -Force -ErrorAction SilentlyContinue |
-        Where-Object {
-          $n = Get-Norm $_.Name
-          (@($terms | Where-Object { $n.Contains((Get-Norm $_)) }).Count -gt 0)
-        }
-    } catch { continue }
-
-    foreach ($d in $dirs) {
-      $done = $false
-      try { $files = @(Get-ChildItem -LiteralPath $d.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $files = @() }
-      if ($files.Count -gt 0) { $hits += (New-Hit $d.Name $d.FullName $files); $done = $true }
-
-      if (-not $done) {
-        try { $subs = Get-ChildItem -LiteralPath $d.FullName -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue } catch { $subs = @() }
-        foreach ($sd in $subs) {
-          try { $sf = @(Get-ChildItem -LiteralPath $sd.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $sf = @() }
-          if ($sf.Count -gt 0) {
-            $rel = $sd.FullName.Substring($d.FullName.Length).TrimStart('\', '/')
-            $hits += (New-Hit ($d.Name + '\' + $rel) $sd.FullName $sf)
-          }
-        }
-      }
-    }
-  }
-
-  $seen = @{}
-  $uniq = @()
-  foreach ($h in ($hits | Sort-Object Last -Descending)) {
-    if ($seen.ContainsKey($h.Path)) { continue }
-    $seen[$h.Path] = 1
-    $uniq += $h
-  }
-  return $uniq
+function New-HitFromDir([string]$label, [string]$path) {
+  try { $files = @(Get-ChildItem -LiteralPath $path -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $files = @() }
+  if ($files.Count -eq 0) { return $null }
+  return (New-Hit $label $path $files)
 }
 
-function Find-GameDirs([string]$keyword, $roots, [scriptblock]$onStep = $null) {
+function Uniq-Hits($list) {
+  $seen = @{}; $res = @()
+  foreach ($h in ($list | Where-Object { $_ } | Sort-Object Last -Descending)) {
+    if ($seen.ContainsKey($h.Path)) { continue }
+    $seen[$h.Path] = 1; $res += $h
+  }
+  return $res
+}
+
+function Find-GameDirs([string]$keyword, [scriptblock]$onStep = $null) {
   $kw = $keyword.Trim().ToLower()
   if (-not $kw) { return @() }
 
@@ -352,55 +307,99 @@ function Find-GameDirs([string]$keyword, $roots, [scriptblock]$onStep = $null) {
       foreach ($a in $global:SR_Aliases[$k]) { $terms += (Get-Norm $a) }
     }
   }
-  $weak = @('game', 'games', 'save', 'saves', 'data', 'files', 'user', 'player', 'players', 'saved', 'local', 'roaming')
-  $terms = $terms | Where-Object { $_ -and $_.Length -ge 3 -and $_ -notin $weak } | Select-Object -Unique
-  if (@($terms).Count -eq 0) { return @() }
+  $weak = @('game', 'games', 'save', 'saves', 'saved', 'savegames', 'data', 'files', 'user', 'player', 'players', 'local', 'roaming')
+  $terms = @($terms | Where-Object { $_ -and $_.Length -ge 3 -and $_ -notin $weak } | Select-Object -Unique)
+  if ($terms.Count -eq 0) { return @() }
 
-  $junkDir = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shaders|bin|obj|lib|libs|libraries|redist|installer|installers|config|configs|settings|recommendations|nvbackend|plugin|plugins|backup|backups|old|bak|pictures|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets|movies)$'
-  $junkPath = '\\NVIDIA Corporation\\|\\Microsoft\\|\\Windows\\|\\Temp\\'
+  $saveNames = @('savegames', 'savegame', 'saved', 'save', 'saves')
+  $junkDir = '^(_|uninstall|log|logs|crash|crashes|krashes|krash|cache|caches|temp|tmp|shader|shaders|bin|obj|lib|libs|libraries|redist|installer|installers|config|configs|settings|recommendations|nvbackend|plugin|plugins|pictures|screenshot|screenshots|movies|videos|audio|sounds|textures|assets|paks|presets)$'
+  $junkPath = '\\AppData\\Local\\|\\NVIDIA Corporation\\|\\Microsoft\\|\\Windows\\|\\Temp\\'
 
-  $hits = @()
-  $idx = 0
-  foreach ($root in $roots) {
-    $idx++
-    if ($onStep) { & $onStep $root $idx $roots.Count }
+  function Get-MatchedDirs($root, [int]$depth) {
     try {
-      $dirs = Get-ChildItem -LiteralPath $root -Recurse -Depth 4 -Directory -Force -ErrorAction SilentlyContinue |
+      return @(Get-ChildItem -LiteralPath $root -Recurse -Depth $depth -Directory -Force -ErrorAction SilentlyContinue |
         Where-Object {
           $n = Get-Norm $_.Name
           if ($n -match $junkDir) { return $false }
           if ($_.FullName -match $junkPath) { return $false }
-          $hit = $false
-          foreach ($t in $terms) { if ($n.Contains($t)) { $hit = $true; break } }
-          $hit
-        }
-    } catch { continue }
+          foreach ($t in $terms) { if ($n.Contains($t)) { return $true } }
+          return $false
+        })
+    } catch { return @() }
+  }
 
+  function Collect-From($dirs, [bool]$anySubdir) {
+    $out = @()
     foreach ($d in $dirs) {
-      try { $files = @(Get-ChildItem -LiteralPath $d.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $files = @() }
-      $h = if ($files.Count -gt 0) { New-Hit $d.Name $d.FullName $files } else { $null }
-      if ($h) { $hits += $h; continue }
-
-      try { $subs = Get-ChildItem -LiteralPath $d.FullName -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue } catch { $subs = @() }
+      $h = New-HitFromDir $d.Name $d.FullName
+      if ($h) {
+        $strongDir = ($saveNames -contains (Get-Norm $d.Name))
+        $h | Add-Member -NotePropertyName Strong -NotePropertyValue $strongDir -Force
+        $out += $h
+        continue
+      }
+      try { $subs = @(Get-ChildItem -LiteralPath $d.FullName -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue) } catch { $subs = @() }
       foreach ($sd in $subs) {
         $sn = Get-Norm $sd.Name
         if ($sn -match $junkDir) { continue }
-        if ($sd.FullName -match $junkPath) { continue }
-        try { $sf = @(Get-ChildItem -LiteralPath $sd.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $sf = @() }
-        $h2 = if ($sf.Count -gt 0) { New-Hit ($d.Name + '\' + $sd.FullName.Substring($d.FullName.Length).TrimStart('\', '/')) $sd.FullName $sf } else { $null }
-        if ($h2) { $hits += $h2 }
+        if (-not $anySubdir -and ($saveNames -notcontains $sn)) { continue }
+        $h2 = New-HitFromDir ($d.Name + '\' + $sd.FullName.Substring($d.FullName.Length).TrimStart('\', '/')) $sd.FullName
+        if ($h2) { $h2 | Add-Member -NotePropertyName Strong -NotePropertyValue $true -Force; $out += $h2 }
       }
+    }
+    return $out
+  }
+
+  $pool = @()
+
+  # 一、游戏安装目录：优先找 SaveGames / Saved / Save / Saves
+  $gameRoots = @(Get-GameRoots)
+  $i = 0
+  foreach ($root in $gameRoots) {
+    $i++
+    if ($onStep) { & $onStep ('游戏目录 ' + $i + '/' + $gameRoots.Count + '：' + $root) }
+    $dirs = Get-MatchedDirs $root 3
+    if ($dirs.Count -gt 0) { $pool += @(Collect-From $dirs $false | Where-Object { $_.Strong }) }
+  }
+  $strong1 = @($pool | Where-Object { $_.Strong })
+  if ($strong1.Count -gt 0) { return (Uniq-Hits $strong1) }
+
+  # 二、AppData\LocalLow
+  $low = Join-Path $env:USERPROFILE 'AppData\LocalLow'
+  if (Test-Path -LiteralPath $low) {
+    if ($onStep) { & $onStep '用户数据目录 LocalLow' }
+    $dirs = Get-MatchedDirs $low 3
+    if ($dirs.Count -gt 0) {
+      $h2 = @(Collect-From $dirs $false)
+      $strong2 = @($h2 | Where-Object { $_.Strong })
+      if ($strong2.Count -gt 0) { return (Uniq-Hits $strong2) }
+      $any2 = @(Collect-From $dirs $true)
+      if ($any2.Count -gt 0) { return (Uniq-Hits $any2) }
+      $pool += $h2
     }
   }
 
-  $seen = @{}
-  $uniq = @()
-  foreach ($h in ($hits | Where-Object { $_ } | Sort-Object Last -Descending)) {
-    if ($seen.ContainsKey($h.Path)) { continue }
-    $seen[$h.Path] = 1
-    $uniq += $h
+  # 三、兜底：Roaming / 文档 / 已保存的游戏（不碰 AppData\Local）
+  $roots = @(Get-SearchRoots)
+  $i = 0
+  foreach ($root in $roots) {
+    $i++
+    if ($onStep) { & $onStep ('用户目录 ' + $i + '/' + $roots.Count + '：' + $root) }
+    $dirs = Get-MatchedDirs $root 3
+    if ($dirs.Count -gt 0) { $pool += (Collect-From $dirs $false) }
   }
-  return $uniq
+  $strong3 = @($pool | Where-Object { $_.Strong })
+  if ($strong3.Count -gt 0) { return (Uniq-Hits $strong3) }
+
+  $loose = @($pool | Where-Object { $_ })
+  if ($loose.Count -gt 0) { return (Uniq-Hits $loose) }
+
+  # 四、还是没有：放宽到这些目录下的任意子文件夹
+  foreach ($root in $roots) {
+    $dirs = Get-MatchedDirs $root 3
+    if ($dirs.Count -gt 0) { $pool += (Collect-From $dirs $true) }
+  }
+  return (Uniq-Hits $pool)
 }
 function Find-InPath([string]$path) {
   $hits = @()
@@ -800,7 +799,7 @@ function Show-Gui {
     }
     try {
       $cb = { param($root, $i, $total) $status.Text = ('正在搜索 ' + $i + '/' + $total + '：' + $root); [System.Windows.Forms.Application]::DoEvents() }
-      $res = @(Find-GameDirs $kw (Get-SearchRoots) $cb)
+      $res = @(Find-GameDirs $kw $cb)
       $n = Fill-Find $res
       if ($n -eq 0) {
         $status.Text = '没匹配到。点“列出全部候选”，或粘游戏安装目录，或用英文文件夹名。'
