@@ -10,7 +10,7 @@
 # ==========================================================
 
 $ErrorActionPreference = 'Stop'
-$script:AppVer = 'v1.0.18'
+$script:AppVer = 'v1.0.19'
 $script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:CfgPath = Join-Path $script:Root 'config.txt'
 
@@ -1095,16 +1095,17 @@ function Show-Gui {
   $log.BorderStyle = 'FixedSingle'
   $form.Controls.Add($log)
 
-  $status = New-Label '就绪' 206 610 500
+  $status = New-Label '' 206 612 1 1
+  $status.Visible = $false
   $status.ForeColor = [System.Drawing.Color]::FromArgb(55, 65, 77)
   $form.Controls.Add($status)
 
-  $lblHint = New-Label '有些游戏搜不到，试文件夹名' 12 606 178 20
+  $lblHint = New-Label '有些游戏搜不到，试文件夹名' 12 556 178 20
   $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(128, 137, 150)
   $lblHint.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $rail.Controls.Add($lblHint)
 
-  $lblVer = New-Label ($script:AppVer) 12 626 178 20
+  $lblVer = New-Label ($script:AppVer) 12 580 178 20
   $lblVer.ForeColor = [System.Drawing.Color]::FromArgb(150, 158, 170)
   $lblVer.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
   $rail.Controls.Add($lblVer)
