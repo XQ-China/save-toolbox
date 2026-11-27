@@ -1289,6 +1289,9 @@ function Show-Gui {
       } catch { Write-Log ('删除失败：存档/' + $g + ' · ' + $_.Exception.Message) 'err'; $bad++ }
     }
     $status.Text = ('云存档已清 ' + $ok + ' 个')
+    if ($ok -gt 0) {
+      try { $n = Rebuild-Readme $cfg; Write-Log ('仓库清单已刷新：剩 ' + $n + ' 条') 'info' } catch { Write-Log ('清单刷新失败：' + $_.Exception.Message) 'warn' }
+    }
     Write-Log ('清除云存档完成：成功 ' + $ok + ' 个，失败 ' + $bad + ' 个') $(if ($bad) { 'ok' } else { 'warn' })
     try { $script:DlPlan = @(); $dlGrid.Rows.Clear(); $chkAll.Checked = $false } catch { }
   })
