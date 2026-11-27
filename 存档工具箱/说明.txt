@@ -79,14 +79,22 @@ config.txt          不用管，第一次运行会自动生成在 exe 旁边
 六、查找存档
 ==================================================
 1. 输入游戏名（中文名、英文文件夹名都行，也可以直接粘游戏安装目录的路径）
-2. 点"查找存档"，程序会扫这几个位置：
-   AppData\Roaming、AppData\Local、AppData\LocalLow、Saved Games、文档、
-   以及 Steam 库目录
+2. 点"查找存档"，程序按这个顺序找，找到就返回：
+   ① 游戏安装目录里名为 SaveGames / Saved / Save / Saves / Worlds 的文件夹
+      （Saved\SaveGames\Steam\数字ID 这种多层会一路钻到最里层；泰拉瑞亚 tModLoader\Worlds、
+       Minecraft 的 saves\世界名 也认）
+   ② AppData\LocalLow
+   ③ AppData\Roaming、文档、文档\My Games、Saved Games
+   （不扫 AppData\Local，那是日志；日志/缓存/Config/Crash 等目录一律跳过）
+   存档文件只认 .sav、.json 这类后缀
 3. 结果表每个存档文件一行：游戏名 / 存档文件 / 大小 / 存档位置 / 状态
 4. 不确定叫什么，就点"列出全部候选"，把所有带存档特征的目录列出来自己挑
 5. 选中一行（或勾表头左侧那个小方框＝全选），点"填入上传区"，
    会自动跳到上传页并填好游戏名、目录和文件
 6. 格子里路径太长看不全时，鼠标停在上面会弹出小框显示完整内容
+7. SteamID 目录（Saved\7656xxxxx\SaveGames 里那串数字）不用手动改：
+   程序会自己认出当前电脑的 ID，上传时存成 {STEAMID} 占位符，
+   别人还原时自动换成他自己的 ID，只存档、不存 ID
 
 小提示：搜不到多半是名字对不上，试试英文文件夹名（比如 Stardew Valley、
 Minecraft），或者直接把游戏安装目录粘进搜索框。
