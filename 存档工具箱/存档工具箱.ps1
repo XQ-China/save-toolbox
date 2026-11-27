@@ -149,6 +149,7 @@ function Build-Plan($cfg, $tree) {
       continue
     }
     $dest = [Environment]::ExpandEnvironmentVariables($dest).TrimEnd('\', '/')
+    $dest = Expand-SteamIdPath $dest
     $files = @($meta.files)
     if (-not $files -or $files.Count -eq 0) {
       $plan += [pscustomobject]@{ Game = $name; File = '(空)'; Target = $dest; RepoPath = $m.path; State = 'meta 里没有文件' }
@@ -203,7 +204,7 @@ function Upload-Saves($cfg, [string]$game, [string]$localDir, [string[]]$files, 
   }
   $meta = [ordered]@{
     name      = $game
-    localPath = $localDir
+    localPath = (ConvertTo-DestTemplate $localDir)
     files     = @($files)
     updated   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   }
@@ -286,6 +287,144 @@ function New-HitFromDir([string]$label, [string]$path) {
   return (New-Hit $label $path $files)
 }
 
+# ===== SteamID 识别：纯数字 15~17 位就是 ID，000…0 / 999…9 当成占位 =====
+$script:SteamIdRx = '^[0-9]{15,17}$'
+$script:SavNames = @('savegames', 'savegame', 'saved', 'save', 'saves')
+
+function Test-HasSaveFiles([string]$p) {
+  try {
+    return @(Get-ChildItem -LiteralPath $p -File -Force -ErrorAction SilentlyContinue |
+      Where-Object { $script:SaveExts -contains $_.Extension.ToLower() -and $_.Length -lt 300MB }).Count -gt 0
+  } catch { return $false }
+}
+
+function Test-DummyId([string]$name) {
+  return (($name -match '^0+$') -or ($name -match '^9+$'))
+}
+
+# 这一层的 ID 目录，或隔一层 Steam/User 之后的 ID 目录
+function Get-IdDirs([string]$dir) {
+  $out = @()
+  if (-not (Test-Path -LiteralPath $dir)) { return @() }
+  try { $subs = @(Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue) } catch { return @() }
+  foreach ($c in $subs) {
+    if ($c.Name -match $script:SteamIdRx) { $out += $c; continue }
+    $cn = Get-Norm $c.Name
+    if ($cn -match '^(steam|steamuser|steamid|steamusers|users|user|profile|profiles|accounts)$') {
+      try { $g = @(Get-ChildItem -LiteralPath $c.FullName -Directory -Force -ErrorAction SilentlyContinue) } catch { $g = @() }
+      foreach ($x in $g) { if ($x.Name -match $script:SteamIdRx) { $out += $x } }
+    }
+  }
+  return $out
+}
+
+function Get-DirSize($d) {
+  try { return [int64]((Get-ChildItem -LiteralPath $d.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum) }
+  catch { return 0 }
+}
+
+# 挑真正的 ID：先排除 000…0 / 999…9，再比体积
+function Pick-IdDir($ids) {
+  if (-not $ids -or $ids.Count -eq 0) { return $null }
+  $real = @($ids | Where-Object { -not (Test-DummyId $_.Name) })
+  if ($real.Count -eq 0) { $real = @($ids) }
+  $pick = $real[0]; $best = -1
+  foreach ($id in $real) {
+    $sz = Get-DirSize $id
+    if ($sz -gt $best) { $best = $sz; $pick = $id }
+  }
+  return $pick
+}
+
+# 这一层有 ID 就钻进去：Saved\SaveGames\Steam\<id>、Saved\<id> 都认
+function Get-IdNode($dir) {
+  $ids = @(Get-IdDirs $dir)
+  $pick = Pick-IdDir $ids
+  if (-not $pick) { return $null }
+  $subs = @()
+  try { $subs = @(Get-ChildItem -LiteralPath $pick.FullName -Directory -Force -ErrorAction SilentlyContinue) } catch { $subs = @() }
+  foreach ($b in $subs) {
+    if (($script:SavNames -contains (Get-Norm $b.Name)) -and (Test-HasSaveFiles $b.FullName)) {
+      return [pscustomobject]@{ Path = $b.FullName; Strong = $true }
+    }
+  }
+  if (Test-HasSaveFiles $pick.FullName) { return [pscustomobject]@{ Path = $pick.FullName; Strong = $true } }
+  foreach ($b in $subs) {
+    if (Test-HasSaveFiles $b.FullName) { return [pscustomobject]@{ Path = $b.FullName; Strong = $true } }
+  }
+  return [pscustomobject]@{ Path = $pick.FullName; Strong = $true }
+}
+
+# 往下钻到真正放存档的位置：ID 目录 → 存档夹 → 目录本身
+function Get-SaveNode([string]$path, [int]$depth = 0) {
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  $idNode = Get-IdNode $path
+  if ($idNode) { return $idNode }
+
+  if ($depth -le 2) {
+    $subs = @()
+    try { $subs = @(Get-ChildItem -LiteralPath $path -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue) } catch { $subs = @() }
+    $cands = @($subs | Where-Object { $script:SavNames -contains (Get-Norm $_.Name) })
+    if ($cands.Count -gt 0) {
+      $cands = @($cands | Sort-Object { @($_.FullName.Split('\')).Count } -Descending)
+      foreach ($c in $cands) {
+        $deep = $null
+        if ($depth -lt 2) { $deep = Get-SaveNode $c.FullName ($depth + 1) }
+        if ($deep) { return $deep }
+        if (Test-HasSaveFiles $c.FullName) { return [pscustomobject]@{ Path = $c.FullName; Strong = $true } }
+      }
+    }
+  }
+
+  $leaf = Get-Norm (Split-Path -Leaf $path)
+  if (($script:SavNames -contains $leaf) -and (Test-HasSaveFiles $path)) { return [pscustomobject]@{ Path = $path; Strong = $true } }
+  if (Test-HasSaveFiles $path) { return [pscustomobject]@{ Path = $path; Strong = $false } }
+  return $null
+}
+
+# 把路径里的 {STEAMID} 占位符换成当前机器上真实存在的 ID 目录（别人的 ID 也能自动对上）
+function Expand-SteamIdPath([string]$dest) {
+  if (-not $dest) { return $dest }
+  $hasPh = ($dest -match '(?i)\{STEAMID\}')
+  $segIdx = -1
+  $parts = @($dest -split '\\')
+  for ($k = 0; $k -lt $parts.Count; $k++) { if ($parts[$k] -match $script:SteamIdRx) { $segIdx = $k; break } }
+  if (-not $hasPh -and $segIdx -lt 0) { return $dest }
+
+  $parent = ''
+  if ($hasPh) {
+    $pre = ($dest -split '(?i)\{STEAMID\}')[0].TrimEnd('\')
+    $parent = $pre
+  } elseif ($segIdx -gt 0) {
+    $parent = (@($parts[0..($segIdx - 1)]) -join '\')
+  }
+  $realId = Pick-SteamId $parent
+
+  if ($hasPh) {
+    if ($realId) { return ($dest -replace '(?i)\{STEAMID\}', $realId) }
+    $d2 = ($dest -replace '(?i)\{STEAMID\}\\?', '')
+    return $d2
+  }
+  if ($segIdx -ge 0 -and $realId -and ($parts[$segIdx] -ne $realId)) {
+    $np = @($parts); $np[$segIdx] = $realId
+    return ($np -join '\')
+  }
+  return $dest
+}
+
+# 上传时把本机路径存成通用模板：家目录用 %USERPROFILE%，SteamID 用 {STEAMID}
+function ConvertTo-DestTemplate([string]$path) {
+  if (-not $path) { return $path }
+  $t = $path
+  if ($env:USERPROFILE -and $t.StartsWith($env:USERPROFILE, [StringComparison]::OrdinalIgnoreCase)) {
+    $t = '%USERPROFILE%' + $t.Substring($env:USERPROFILE.Length)
+  }
+  $parts = @($t -split '\\')
+  for ($k = 0; $k -lt $parts.Count; $k++) {
+    if ($parts[$k] -match $script:SteamIdRx) { $parts[$k] = '{STEAMID}' }
+  }
+  return ($parts -join '\')
+}
 function Uniq-Hits($list) {
   $seen = @{}; $res = @()
   foreach ($h in ($list | Where-Object { $_ } | Sort-Object Last -Descending)) {
@@ -331,26 +470,35 @@ function Find-GameDirs([string]$keyword, [scriptblock]$onStep = $null) {
   function Collect-From($dirs, [bool]$anySubdir) {
     $out = @()
     foreach ($d in $dirs) {
-      $h = New-HitFromDir $d.Name $d.FullName
-      if ($h) {
-        $strongDir = ($saveNames -contains (Get-Norm $d.Name))
-        $h | Add-Member -NotePropertyName Strong -NotePropertyValue $strongDir -Force
-        $out += $h
+      $node = Get-SaveNode $d.FullName
+      if ($node) {
+        $h = New-HitFromDir $d.Name $node.Path
+        if ($h) {
+          $h.Path = $node.Path
+          $h | Add-Member -NotePropertyName Strong -NotePropertyValue $node.Strong -Force
+          $out += $h
+        }
         continue
       }
+      if (-not $anySubdir) { continue }
       try { $subs = @(Get-ChildItem -LiteralPath $d.FullName -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue) } catch { $subs = @() }
       foreach ($sd in $subs) {
         $sn = Get-Norm $sd.Name
         if ($sn -match $junkDir) { continue }
-        if (-not $anySubdir -and ($saveNames -notcontains $sn)) { continue }
-        $h2 = New-HitFromDir ($d.Name + '\' + $sd.FullName.Substring($d.FullName.Length).TrimStart('\', '/')) $sd.FullName
-        if ($h2) { $h2 | Add-Member -NotePropertyName Strong -NotePropertyValue $true -Force; $out += $h2 }
+        $node2 = Get-SaveNode $sd.FullName
+        if (-not $node2) { continue }
+        $rel = $sd.FullName.Substring($d.FullName.Length).TrimStart('\', '/')
+        $h2 = New-HitFromDir ($d.Name + '\' + $rel) $node2.Path
+        if ($h2) {
+          $h2.Path = $node2.Path
+          $h2 | Add-Member -NotePropertyName Strong -NotePropertyValue $true -Force
+          $out += $h2
+        }
       }
     }
     return $out
   }
-
-  $pool = @()
+$pool = @()
 
   # 一、游戏安装目录：优先找 SaveGames / Saved / Save / Saves
   $gameRoots = @(Get-GameRoots)
@@ -404,19 +552,20 @@ function Find-GameDirs([string]$keyword, [scriptblock]$onStep = $null) {
 function Find-InPath([string]$path) {
   $hits = @()
   $base = $path.TrimEnd('\', '/')
-  try { $files = @(Get-ChildItem -LiteralPath $base -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $files = @() }
-  if ($files.Count -gt 0) { $hits += (New-Hit (Split-Path -Leaf $base) $base $files) }
-  try { $subs = Get-ChildItem -LiteralPath $base -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue } catch { $subs = @() }
+  $node = Get-SaveNode $base
+  if ($node) {
+    $h = New-HitFromDir (Split-Path -Leaf $node.Path) $node.Path
+    if ($h) { $hits += $h }
+  }
+  try { $subs = @(Get-ChildItem -LiteralPath $base -Recurse -Depth 2 -Directory -Force -ErrorAction SilentlyContinue) } catch { $subs = @() }
   foreach ($sd in $subs) {
-    try { $sf = @(Get-ChildItem -LiteralPath $sd.FullName -File -Force -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 300MB } | Sort-Object LastWriteTime -Descending) } catch { $sf = @() }
-    if ($sf.Count -gt 0) {
-      $rel = $sd.FullName.Substring($base.Length).TrimStart('\', '/')
-      $hits += (New-Hit $rel $sd.FullName $sf)
-    }
+    $node2 = Get-SaveNode $sd.FullName
+    if (-not $node2) { continue }
+    $h2 = New-HitFromDir ($sd.FullName.Substring($base.Length).TrimStart('\', '/')) $node2.Path
+    if ($h2) { $hits += $h2 }
   }
   return $hits | Sort-Object Last -Descending
 }
-
 function Find-AllCandidates($roots, [scriptblock]$onStep = $null) {
   $noise = @('cache', 'cachedata', 'logs', 'log', 'crash', 'crashes', 'temp', 'tmp', 'shader', 'shadercache', 'backup')
   $map = @{}
